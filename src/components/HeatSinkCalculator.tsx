@@ -30,6 +30,7 @@ interface HeatSinkResults {
   width: number;
   spacing: number;
   numberOfFins: number;
+  details?: { h: number; Rth: number };
 }
 
 const HeatSinkCalculator = () => {
@@ -51,79 +52,80 @@ const HeatSinkCalculator = () => {
     try {
       // Heat sink calculation based on natural convection and radiation
       const deltaT = inputs.maxSurfaceTemp - inputs.ambientTemp;
-      const g = 9.81; // gravity
-      const nu = 1.5e-5; // kinematic viscosity of air at ~55°C
-      const k = 0.027; // thermal conductivity of air at ~55°C
-      const Pr = 0.71; // Prandtl number for air
-      const beta = 1 / (inputs.ambientTemp + 273.15); // thermal expansion coefficient
+      const Ts = inputs.maxSurfaceTemp + 273.15; // Convert to Kelvin
+      const Tamb = inputs.ambientTemp + 273.15; // Convert to Kelvin
+      const Tavg = (Ts + Tamb) / 2; // Average temperature in Kelvin
 
-      // Geometry in SI
-      const H_m = inputs.height / 1000;
-      const L_m = inputs.length / 1000;
+      // Air properties at average temperature (approximations for typical conditions)
+      const g = 9.81; // gravity m/s²
+      const beta = 1 / Tavg; // thermal expansion coefficient 1/K
+      const nu = 1.568e-5; // kinematic viscosity of air m²/s
+      const alpha = 2.2e-5; // thermal diffusivity of air m²/s
+      const k = 0.0263; // thermal conductivity of air W/m·K
+      const sigma = 5.67e-8; // Stefan-Boltzmann constant
 
-      if (deltaT <= 0) throw new Error("T_s must exceed T_amb");
+      // Convert dimensions to meters for calculations
+      const L = inputs.length / 1000; // length in meters
+      const H = inputs.height / 1000; // height in meters
+      const t = inputs.finThickness / 1000; // thickness in meters
+      const b = inputs.baseThickness / 1000; // base thickness in meters
 
-      // Rayleigh number for vertical fins
-      const Ra = (g * beta * deltaT * H_m ** 3) / (nu * (nu / Pr));
+      // Calculate optimal fin spacing (Equation 5 from the article)
+      const sopt =
+        2.71 * Math.pow((g * beta * deltaT) / (L * alpha * nu), -0.25);
+      const spacing = sopt * 1000; // convert to mm
 
-      // Nusselt number for natural convection
-      const Nu =
-        0.68 +
-        (0.67 * Math.pow(Ra, 0.25)) /
-          Math.pow(1 + Math.pow(0.492 / Pr, 9 / 16), 4 / 9);
+      // Calculate heat transfer coefficients
+      // h1 for external surfaces (Equation 3)
+      const h1 = 1.42 * Math.pow(deltaT / L, 0.25);
 
-      // Convection heat transfer coefficient
-      const h = (Nu * k) / H_m; // W/m²K
+      // h2 for surfaces between fins (Equation 7)
+      const h2 = (1.31 * k) / sopt;
 
-      // Optimal fin spacing for maximum heat transfer
-      // const spacing = 2.714 * Math.pow(inputs.height / 1000 / Ra, 0.25) * 1000; // convert to mm
+      // Calculate surface areas
+      // A1: External side surfaces (Equation 2)
+      const A1 = H * L + t * (2 * H + L);
 
-      // eq5 from Bar‑Cohen & Rohsenow:
-      // const s_opt_m =
-      //   Math.pow((2 * nu * nu) / (g * beta * deltaT), 0.25) *
-      //   (inputs.height / 1000);
+      // A2: Internal fin surfaces (Equation 4)
+      const A2 = L * (2 * (H - b) + sopt) + 2 * (t * H + sopt * b) + t * L;
 
-      const k_f = 205; // W/mK (aluminum)
-      const s_opt_m =
-        2.714 * Math.pow(k_f / (h * H_m), 0.25) * (inputs.height / 1000);
+      // Apparent radiation area A_r2 (Equation 11)
+      const Ar2 = L * (t + sopt) + 2 * (t * H + sopt * b);
 
-      // back to mm, rounded:
-      const spacing = Math.round(s_opt_m * 1000 * 10) / 10;
+      // Calculate heat dissipation from external surfaces
+      // Convection from A1 (Equation 1)
+      const Qc1 = 2 * h1 * A1 * deltaT;
 
-      // Stefan-Boltzmann constant
-      const sigma = 5.67e-8;
-
-      // Surface area calculations
-      const baseArea = (inputs.length / 1000) * (inputs.length / 1000); // assuming square base
-
-      // Heat dissipated by convection and radiation per fin
-      const finSurfaceArea = 2 * H_m * L_m;
-      const qConvectionPerFin = h * finSurfaceArea * deltaT;
-      const qRadiationPerFin =
+      // Radiation from A1 (Equation 9)
+      const Qr1 =
+        2 *
         inputs.emissivity *
         sigma *
-        finSurfaceArea *
-        (Math.pow(inputs.maxSurfaceTemp + 273.15, 4) -
-          Math.pow(inputs.ambientTemp + 273.15, 4));
+        A1 *
+        (Math.pow(Ts, 4) - Math.pow(Tamb, 4));
 
-      const qPerFin = qConvectionPerFin + qRadiationPerFin;
+      // Heat dissipation per fin (internal surfaces)
+      // Convection from A2 (Equation 8)
+      const Qc2 = h2 * A2 * deltaT;
 
-      // Number of fins required
-      const numberOfFins = Math.ceil(inputs.power / qPerFin);
+      // Radiation from A2 (Equation 10)
+      const Qr2 =
+        inputs.emissivity * sigma * Ar2 * (Math.pow(Ts, 4) - Math.pow(Tamb, 4));
 
-      // Total width
-      const totalWidth_m =
-        numberOfFins * (inputs.finThickness / 1000) +
-        (numberOfFins - 1) * s_opt_m;
-      const width = Math.round(totalWidth_m * 1000 * 10) / 10;
-      // Heat sink width
-      // const width =
-      //   numberOfFins * inputs.finThickness + (numberOfFins - 1) * spacing;
+      // Calculate number of fins (Equation 12)
+      const numberOfFins = Math.max(
+        1,
+        Math.ceil(1 + (inputs.power - Qr1 - Qc1) / (Qr2 + Qc2))
+      );
+
+      // Calculate heat sink width (Equation 13)
+      const width =
+        (numberOfFins - 1) * spacing + numberOfFins * inputs.finThickness;
 
       setResults({
         width: Math.round(width * 10) / 10,
         spacing: Math.round(spacing * 10) / 10,
-        numberOfFins: numberOfFins,
+        numberOfFins,
       });
 
       toast({
@@ -391,6 +393,9 @@ const HeatSinkCalculator = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* AI Advisor Section */}
+      {/* <AIAdvisor inputs={inputs} results={results} /> */}
 
       <Card className="bg-technical-blue-light border-technical-blue/20">
         <CardContent className="pt-6">
