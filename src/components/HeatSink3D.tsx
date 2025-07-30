@@ -27,7 +27,7 @@ function HeatSinkMesh({
   useFrame((state) => {
     if (groupRef.current) {
       groupRef.current.rotation.y =
-        Math.sin(state.clock.elapsedTime * 0.5) * 0.3;
+        Math.sin(state.clock.elapsedTime * 0.3) * 0.2;
     }
   });
 
@@ -43,21 +43,37 @@ function HeatSinkMesh({
   return (
     <group ref={groupRef}>
       <mesh position={[0, -scaledBaseThickness / 2, 0]}>
-        <boxGeometry args={[scaledWidth, scaledBaseThickness, scaledLength]} />
-        <meshPhongMaterial color="#666666" />
+        <boxGeometry
+          args={[
+            Math.max(0.1, scaledWidth),
+            Math.max(0.01, scaledBaseThickness),
+            Math.max(0.1, scaledLength),
+          ]}
+        />
+        <meshPhongMaterial color="#ff6b35" />
       </mesh>
 
-      {Array.from({ length: numberOfFins }, (_, i) => {
+      {Array.from({ length: Math.max(1, numberOfFins) }, (_, i) => {
+        const totalFinWidth = numberOfFins * scaledFinThickness;
+        const totalSpacing = (numberOfFins + 1) * scaledSpacing;
+        const actualWidth = Math.max(scaledWidth, totalFinWidth + totalSpacing);
+
         const finPosition =
-          -scaledWidth / 2 +
+          -actualWidth / 2 +
+          scaledSpacing +
           scaledFinThickness / 2 +
           i * (scaledFinThickness + scaledSpacing);
+
         return (
           <mesh key={i} position={[finPosition, scaledHeight / 2, 0]}>
             <boxGeometry
-              args={[scaledFinThickness, scaledHeight, scaledLength]}
+              args={[
+                Math.max(0.01, scaledFinThickness),
+                Math.max(0.1, scaledHeight),
+                Math.max(0.1, scaledLength),
+              ]}
             />
-            <meshPhongMaterial color="#888888" />
+            <meshPhongMaterial color="#ffa500" />
           </mesh>
         );
       })}
