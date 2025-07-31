@@ -25,6 +25,9 @@ import {
   Eye,
   FileSpreadsheet,
   Wrench,
+  AlertTriangle,
+  ExternalLink,
+  HelpCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -33,8 +36,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import Papa from "papaparse";
 import HeatSink3D from "./HeatSink3D";
+import AIAdvisor from "./AIAdvisor";
+import { TooltipPortal } from "@radix-ui/react-tooltip";
 
 interface Material {
   name: string;
@@ -54,6 +66,14 @@ interface HeatSinkInputs {
   baseThickness: number;
   emissivity: number;
   material: string;
+  convectionType: "natural" | "forced";
+  airVelocity?: number; // m/s for forced convection
+}
+
+interface ValidationResult {
+  isValid: boolean;
+  message?: string;
+  severity: "info" | "warning" | "error";
 }
 
 interface HeatSinkResults {
@@ -120,11 +140,206 @@ const HeatSinkCalculator = () => {
     baseThickness: 3,
     emissivity: 0.82,
     material: "Aluminum 6061",
+    convectionType: "natural",
+    airVelocity: 1.0,
   });
 
   const [results, setResults] = useState<HeatSinkResults | null>(null);
+  const [validationResults, setValidationResults] = useState<{
+    [key: string]: ValidationResult;
+  }>({});
+
+  const validateInput = (
+    field: keyof HeatSinkInputs,
+    value: number
+  ): ValidationResult => {
+    switch (field) {
+      case "ambientTemp":
+        if (value < -40 || value > 60) {
+          return {
+            isValid: false,
+            message:
+              "Ambient temperature should be between -40°C and 60°C for typical applications",
+            severity: "warning",
+          };
+        }
+        if (value >= inputs.maxSurfaceTemp) {
+          return {
+            isValid: false,
+            message:
+              "Ambient temperature must be lower than maximum surface temperature",
+            severity: "error",
+          };
+        }
+        return { isValid: true, severity: "info" };
+
+      case "maxSurfaceTemp":
+        if (value < 0 || value > 200) {
+          return {
+            isValid: false,
+            message:
+              "Surface temperature should be between 0°C and 200°C for safe operation",
+            severity: "warning",
+          };
+        }
+        if (value <= inputs.ambientTemp) {
+          return {
+            isValid: false,
+            message:
+              "Surface temperature must be higher than ambient temperature",
+            severity: "error",
+          };
+        }
+        return { isValid: true, severity: "info" };
+
+      case "power":
+        if (value <= 0) {
+          return {
+            isValid: false,
+            message: "Power must be greater than 0W",
+            severity: "error",
+          };
+        }
+        if (value > 1000) {
+          return {
+            isValid: false,
+            message:
+              "Power above 1000W may require forced convection or liquid cooling",
+            severity: "warning",
+          };
+        }
+        return { isValid: true, severity: "info" };
+
+      case "emissivity":
+        if (value < 0 || value > 1) {
+          return {
+            isValid: false,
+            message: "Emissivity must be between 0 and 1",
+            severity: "error",
+          };
+        }
+        if (value < 0.1) {
+          return {
+            isValid: false,
+            message:
+              "Very low emissivity - consider surface treatment for better radiation",
+            severity: "warning",
+          };
+        }
+        return { isValid: true, severity: "info" };
+
+      case "length":
+      case "height":
+        if (value <= 0) {
+          return {
+            isValid: false,
+            message: "Dimension must be greater than 0mm",
+            severity: "error",
+          };
+        }
+        if (value > 500) {
+          return {
+            isValid: false,
+            message: "Large dimensions may affect calculation accuracy",
+            severity: "warning",
+          };
+        }
+        return { isValid: true, severity: "info" };
+
+      case "finThickness":
+        if (value <= 0) {
+          return {
+            isValid: false,
+            message: "Fin thickness must be greater than 0mm",
+            severity: "error",
+          };
+        }
+        if (value < 1) {
+          return {
+            isValid: false,
+            message: "Very thin fins may be difficult to manufacture",
+            severity: "warning",
+          };
+        }
+        if (value > 10) {
+          return {
+            isValid: false,
+            message: "Thick fins reduce surface area efficiency",
+            severity: "warning",
+          };
+        }
+        return { isValid: true, severity: "info" };
+
+      case "baseThickness":
+        if (value <= 0) {
+          return {
+            isValid: false,
+            message: "Base thickness must be greater than 0mm",
+            severity: "error",
+          };
+        }
+        if (value < 2) {
+          return {
+            isValid: false,
+            message: "Thin base may cause high thermal resistance",
+            severity: "warning",
+          };
+        }
+        return { isValid: true, severity: "info" };
+
+      case "airVelocity":
+        if (inputs.convectionType === "forced") {
+          if (value <= 0) {
+            return {
+              isValid: false,
+              message:
+                "Air velocity must be greater than 0 m/s for forced convection",
+              severity: "error",
+            };
+          }
+          if (value > 50) {
+            return {
+              isValid: false,
+              message: "Very high air velocity - check fan specifications",
+              severity: "warning",
+            };
+          }
+        }
+        return { isValid: true, severity: "info" };
+
+      default:
+        return { isValid: true, severity: "info" };
+    }
+  };
+
+  const validateAllInputs = (): boolean => {
+    const validations: { [key: string]: ValidationResult } = {};
+
+    Object.keys(inputs).forEach((key) => {
+      const field = key as keyof HeatSinkInputs;
+      if (typeof inputs[field] === "number") {
+        validations[field] = validateInput(field, inputs[field] as number);
+      }
+    });
+
+    setValidationResults(validations);
+
+    return !Object.values(validations).some(
+      (v) => !v.isValid && v.severity === "error"
+    );
+  };
 
   const calculateHeatSink = () => {
+    if (!validateAllInputs()) {
+      toast({
+        title: "Validation Error",
+        description:
+          "Please fix the input validation errors before calculating.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       // Heat sink calculation based on natural/forced convection and radiation
       const deltaT = inputs.maxSurfaceTemp - inputs.ambientTemp;
@@ -151,12 +366,28 @@ const HeatSinkCalculator = () => {
         2.71 * Math.pow((g * beta * deltaT) / (L * alpha * nu), -0.25);
       const spacing = sopt * 1000; // convert to mm
 
-      // Calculate heat transfer coefficients
-      // h1 for external surfaces (Equation 3)
-      const h1 = 1.42 * Math.pow(deltaT / L, 0.25);
+      // Calculate heat transfer coefficients based on convection type
+      let h1, h2;
 
-      // h2 for surfaces between fins (Equation 7)
-      const h2 = (1.31 * k) / sopt;
+      if (inputs.convectionType === "natural") {
+        // h1 for external surfaces (Equation 3) - Natural convection
+        h1 = 1.42 * Math.pow(deltaT / L, 0.25);
+
+        // h2 for surfaces between fins (Equation 7) - Natural convection
+        h2 = (1.31 * k) / sopt;
+        // forced
+      } else {
+        const Re = ((inputs.airVelocity || 1.0) * L) / nu; // Reynolds number
+        const Pr = nu / alpha; // Prandtl number
+
+        // External surfaces - forced convection over flat plate
+        h1 = (k / L) * 0.664 * Math.pow(Re, 0.5) * Math.pow(Pr, 0.33);
+
+        // Internal surfaces - forced convection through channels
+        const Dh = (4 * sopt * H) / (2 * (sopt + H)); // Hydraulic diameter
+        const ReChannel = ((inputs.airVelocity || 1.0) * Dh) / nu;
+        h2 = (k / Dh) * 0.023 * Math.pow(ReChannel, 0.8) * Math.pow(Pr, 0.4);
+      }
 
       // Calculate surface areas
       // A1: External side surfaces (Equation 2)
@@ -220,6 +451,10 @@ const HeatSinkCalculator = () => {
   const handleInputChange = (field: keyof HeatSinkInputs, value: string) => {
     const numValue = parseFloat(value) || 0;
     setInputs((prev) => ({ ...prev, [field]: numValue }));
+
+    // Validate input in real-time
+    const validation = validateInput(field, numValue);
+    setValidationResults((prev) => ({ ...prev, [field]: validation }));
   };
 
   const handleMaterialChange = (materialName: string) => {
@@ -472,10 +707,31 @@ const HeatSinkCalculator = () => {
           radiation cooling. This calculator determines fin spacing, heat sink
           width, and number of fins required.
         </p>
-        <Badge variant="secondary" className="mt-2">
-          <Info className="w-3 h-3 mr-1" />
-          Natural Convection & Radiation
-        </Badge>
+        <div className="flex justify-center gap-2 mt-2">
+          <Badge variant="secondary">
+            <Info className="w-3 h-3 mr-1" />
+            {inputs.convectionType === "natural"
+              ? "Natural Convection & Radiation"
+              : "Forced Convection & Radiation"}
+          </Badge>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="cursor-help">
+                  <HelpCircle className="w-3 h-3 mr-1" />
+                  Need Help?
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                <p>
+                  This calculator uses validated engineering correlations for
+                  heat transfer analysis. Natural convection for passive
+                  cooling, forced convection for fan-assisted cooling.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
@@ -491,9 +747,140 @@ const HeatSinkCalculator = () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Convection Type</Label>
+              <Select
+                value={inputs.convectionType}
+                onValueChange={(value: "natural" | "forced") =>
+                  setInputs((prev) => ({ ...prev, convectionType: value }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    value="natural"
+                    className="relative overflow-visible"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Natural Convection</span>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="w-3 h-3 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipPortal>
+                            <TooltipContent className="z-50">
+                              <p className="max-w-xs">
+                                Passive cooling by air circulation due to
+                                temperature differences
+                              </p>
+                            </TooltipContent>
+                          </TooltipPortal>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  </SelectItem>
+                  <SelectItem
+                    value="forced"
+                    className="relative overflow-visible"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Forced Convection</span>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="w-3 h-3 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipPortal>
+                            <TooltipContent className="z-50">
+                              <p className="max-w-xs">
+                                Active cooling using fans or blowers for air
+                                circulation
+                              </p>
+                            </TooltipContent>
+                          </TooltipPortal>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {inputs.convectionType === "forced" && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="airVelocity">Air Velocity (m/s)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          Typical values: 1-5 m/s for small fans, 5-15 m/s for
+                          industrial applications
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <Input
+                  id="airVelocity"
+                  type="number"
+                  step="0.1"
+                  value={inputs.airVelocity || 1.0}
+                  onChange={(e) =>
+                    handleInputChange("airVelocity", e.target.value)
+                  }
+                  placeholder="1.0"
+                  className={
+                    validationResults.airVelocity &&
+                    !validationResults.airVelocity.isValid
+                      ? "border-destructive"
+                      : ""
+                  }
+                />
+                {validationResults.airVelocity &&
+                  !validationResults.airVelocity.isValid && (
+                    <Alert
+                      variant={
+                        validationResults.airVelocity.severity === "error"
+                          ? "destructive"
+                          : "default"
+                      }
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        {validationResults.airVelocity.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+              </div>
+            )}
+
+            <Separator />
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="ambientTemp">T_amb (°C)</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="ambientTemp">T_amb (°C)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          Ambient air temperature. Typical range: -40°C to 60°C
+                          for electronic applications
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
                 <Input
                   id="ambientTemp"
                   type="number"
@@ -502,10 +889,46 @@ const HeatSinkCalculator = () => {
                     handleInputChange("ambientTemp", e.target.value)
                   }
                   placeholder="25"
+                  className={
+                    validationResults.ambientTemp &&
+                    !validationResults.ambientTemp.isValid
+                      ? "border-destructive"
+                      : ""
+                  }
                 />
+                {validationResults.ambientTemp &&
+                  !validationResults.ambientTemp.isValid && (
+                    <Alert
+                      variant={
+                        validationResults.ambientTemp.severity === "error"
+                          ? "destructive"
+                          : "default"
+                      }
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        {validationResults.ambientTemp.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="maxSurfaceTemp">T_s max (°C)</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="maxSurfaceTemp">T_s max (°C)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          Maximum allowable surface temperature. Must be higher
+                          than ambient temperature
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
                 <Input
                   id="maxSurfaceTemp"
                   type="number"
@@ -514,49 +937,191 @@ const HeatSinkCalculator = () => {
                     handleInputChange("maxSurfaceTemp", e.target.value)
                   }
                   placeholder="85"
+                  className={
+                    validationResults.maxSurfaceTemp &&
+                    !validationResults.maxSurfaceTemp.isValid
+                      ? "border-destructive"
+                      : ""
+                  }
                 />
+                {validationResults.maxSurfaceTemp &&
+                  !validationResults.maxSurfaceTemp.isValid && (
+                    <Alert
+                      variant={
+                        validationResults.maxSurfaceTemp.severity === "error"
+                          ? "destructive"
+                          : "default"
+                      }
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        {validationResults.maxSurfaceTemp.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="power">Power (Watts)</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="power">Power (Watts)</Label>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>
+                        Heat dissipation power. Formula: P = V × I (electrical)
+                        or thermal power to be dissipated
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
               <Input
                 id="power"
                 type="number"
                 value={inputs.power}
                 onChange={(e) => handleInputChange("power", e.target.value)}
                 placeholder="10"
+                className={
+                  validationResults.power && !validationResults.power.isValid
+                    ? "border-destructive"
+                    : ""
+                }
               />
+              {validationResults.power && !validationResults.power.isValid && (
+                <Alert
+                  variant={
+                    validationResults.power.severity === "error"
+                      ? "destructive"
+                      : "default"
+                  }
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription className="text-xs">
+                    {validationResults.power.message}
+                  </AlertDescription>
+                </Alert>
+              )}
             </div>
 
             <Separator />
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="length">Length (mm)</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="length">Length (mm)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          Heat sink length in flow direction. Affects heat
+                          transfer coefficient calculation.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
                 <Input
                   id="length"
                   type="number"
                   value={inputs.length}
                   onChange={(e) => handleInputChange("length", e.target.value)}
                   placeholder="50"
+                  className={
+                    validationResults.length &&
+                    !validationResults.length.isValid
+                      ? "border-destructive"
+                      : ""
+                  }
                 />
+                {validationResults.length &&
+                  !validationResults.length.isValid && (
+                    <Alert
+                      variant={
+                        validationResults.length.severity === "error"
+                          ? "destructive"
+                          : "default"
+                      }
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        {validationResults.length.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="height">Height (mm)</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="height">Height (mm)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          Total heat sink height including base. Taller fins
+                          provide more surface area.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
                 <Input
                   id="height"
                   type="number"
                   value={inputs.height}
                   onChange={(e) => handleInputChange("height", e.target.value)}
                   placeholder="25"
+                  className={
+                    validationResults.height &&
+                    !validationResults.height.isValid
+                      ? "border-destructive"
+                      : ""
+                  }
                 />
+                {validationResults.height &&
+                  !validationResults.height.isValid && (
+                    <Alert
+                      variant={
+                        validationResults.height.severity === "error"
+                          ? "destructive"
+                          : "default"
+                      }
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        {validationResults.height.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="finThickness">Fin Thickness (mm)</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="finThickness">Fin Thickness (mm)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          Individual fin thickness. Thinner fins provide more
+                          surface area but may be harder to manufacture.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
                 <Input
                   id="finThickness"
                   type="number"
@@ -566,10 +1131,46 @@ const HeatSinkCalculator = () => {
                     handleInputChange("finThickness", e.target.value)
                   }
                   placeholder="2"
+                  className={
+                    validationResults.finThickness &&
+                    !validationResults.finThickness.isValid
+                      ? "border-destructive"
+                      : ""
+                  }
                 />
+                {validationResults.finThickness &&
+                  !validationResults.finThickness.isValid && (
+                    <Alert
+                      variant={
+                        validationResults.finThickness.severity === "error"
+                          ? "destructive"
+                          : "default"
+                      }
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        {validationResults.finThickness.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="baseThickness">Base Thickness (mm)</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="baseThickness">Base Thickness (mm)</Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          Base plate thickness. Thicker base reduces thermal
+                          resistance but adds weight.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
                 <Input
                   id="baseThickness"
                   type="number"
@@ -579,12 +1180,48 @@ const HeatSinkCalculator = () => {
                     handleInputChange("baseThickness", e.target.value)
                   }
                   placeholder="3"
+                  className={
+                    validationResults.baseThickness &&
+                    !validationResults.baseThickness.isValid
+                      ? "border-destructive"
+                      : ""
+                  }
                 />
+                {validationResults.baseThickness &&
+                  !validationResults.baseThickness.isValid && (
+                    <Alert
+                      variant={
+                        validationResults.baseThickness.severity === "error"
+                          ? "destructive"
+                          : "default"
+                      }
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription className="text-xs">
+                        {validationResults.baseThickness.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="material">Material</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="material">Material</Label>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>
+                        Material affects thermal conductivity and emissivity.
+                        Higher thermal conductivity improves heat conduction.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
               <Select
                 value={inputs.material}
                 onValueChange={handleMaterialChange}
@@ -595,7 +1232,13 @@ const HeatSinkCalculator = () => {
                 <SelectContent>
                   {materials.map((material) => (
                     <SelectItem key={material.name} value={material.name}>
-                      {material.name} (k={material.thermalConductivity} W/m·K)
+                      <div className="flex flex-col">
+                        <span>{material.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          k={material.thermalConductivity} W/m·K, ε=
+                          {material.emissivity}
+                        </span>
+                      </div>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -603,7 +1246,22 @@ const HeatSinkCalculator = () => {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="emissivity">Surface Emissivity</Label>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="emissivity">Surface Emissivity</Label>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ExternalLink className="w-3 h-3 cursor-help text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>
+                        Surface emissivity for radiation heat transfer (0-1).
+                        Higher values improve radiation cooling.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
               <Input
                 id="emissivity"
                 type="number"
@@ -615,10 +1273,37 @@ const HeatSinkCalculator = () => {
                   handleInputChange("emissivity", e.target.value)
                 }
                 placeholder="0.82"
+                className={
+                  validationResults.emissivity &&
+                  !validationResults.emissivity.isValid
+                    ? "border-destructive"
+                    : ""
+                }
               />
-              <p className="text-xs text-muted-foreground">
-                Auto-updated based on material selection
-              </p>
+              {validationResults.emissivity &&
+                !validationResults.emissivity.isValid && (
+                  <Alert
+                    variant={
+                      validationResults.emissivity.severity === "error"
+                        ? "destructive"
+                        : "default"
+                    }
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription className="text-xs">
+                      {validationResults.emissivity.message}
+                    </AlertDescription>
+                  </Alert>
+                )}
+              <div className="text-xs text-muted-foreground space-y-1">
+                <p>
+                  <strong>Reference values:</strong>
+                </p>
+                <p>• Anodized aluminum: ~0.82</p>
+                <p>• Raw aluminum: ~0.09</p>
+                <p>• Black oxidized: ~0.95</p>
+                <p>• Polished metals: 0.02-0.10</p>
+              </div>
             </div>
 
             <Button
