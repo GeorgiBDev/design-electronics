@@ -80,6 +80,7 @@ interface HeatSinkResults {
   width: number;
   spacing: number;
   numberOfFins: number;
+  thermalResistance: number; // Rth,hs in °C/W
 }
 
 const HeatSinkCalculator = () => {
@@ -429,10 +430,14 @@ const HeatSinkCalculator = () => {
       const width =
         (numberOfFins - 1) * spacing + numberOfFins * inputs.finThickness;
 
+      // Calculate thermal resistance Rth,hs = (Ts,max - Tamb) / P
+      const thermalResistance = deltaT / inputs.power;
+
       setResults({
         width: Math.round(width * 10) / 10,
         spacing: Math.round(spacing * 10) / 10,
         numberOfFins,
+        thermalResistance: Math.round(thermalResistance * 100) / 100,
       });
 
       toast({
@@ -535,6 +540,7 @@ const HeatSinkCalculator = () => {
       ["Heat Sink Width (mm)", results.width],
       ["Fin Spacing (mm)", results.spacing],
       ["Number of Fins", results.numberOfFins],
+      ["Thermal Resistance Rth,hs (°C/W)", results.thermalResistance],
       ["", ""],
       ["DETAILED CALCULATIONS", ""],
       ["Temperature Difference (°C)", deltaT],
@@ -1345,6 +1351,35 @@ const HeatSinkCalculator = () => {
 
                 {/* Results Grid */}
                 <div className="grid gap-4">
+                  <div className="bg-gradient-to-r from-primary/10 to-technical-blue/10 p-4 rounded-lg border border-primary/20">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-muted-foreground">
+                          R<sub>th,hs</sub> (Thermal Resistance)
+                        </span>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="w-3 h-3 cursor-help text-muted-foreground" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>
+                                R<sub>th,hs</sub> = (T<sub>s,max</sub> - T
+                                <sub>amb</sub>) / P
+                              </p>
+                              <p>
+                                Lower values indicate better heat dissipation
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      <span className="text-2xl font-bold text-primary">
+                        {results.thermalResistance} °C/W
+                      </span>
+                    </div>
+                  </div>
+
                   <div className="bg-accent p-4 rounded-lg">
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-medium text-muted-foreground">
